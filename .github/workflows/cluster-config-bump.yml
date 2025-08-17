@@ -1,0 +1,110 @@
+name: Cluster Config Bump (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      cluster_config_repo:
+        description: 'Full name org/repo of cluster-config'
+        required: true
+        type: string
+      observer_application_file:
+        required: false
+        type: string
+      producer_application_file:
+        required: false
+        type: string
+      worker_live_application_file:
+        required: false
+        type: string
+      worker_backfill_application_file:
+        required: false
+        type: string
+      chart_tag_name:
+        description: 'Tag name emitted by Release Please for the chart'
+        required: true
+        type: string
+      cluster_config_base:
+        description: 'Base branch for PR'
+        required: false
+        default: 'main'
+        type: string
+    secrets:
+      CAPTIDE_APP_ID:
+        required: true
+      CAPTIDE_APP_PRIVATE_KEY:
+        required: true
+
+jobs:
+  bump:
+    name: Bump dev Applications to new chart version
+    runs-on: ubuntu-latest
+    concurrency:
+      group: cluster-config-autobump-dev
+      cancel-in-progress: true
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Compute repo name
+        id: repo
+        shell: bash
+        run: echo "repo_name=${{ inputs.cluster_config_repo }}" | awk -F/ '{print "repo_name="$$2}' >> $GITHUB_OUTPUT
+      - name: Create GitHub App installation token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.CAPTIDE_APP_ID }}
+          private-key: ${{ secrets.CAPTIDE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ steps.repo.outputs.repo_name }}
+      - name: Checkout cluster config
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.cluster_config_repo }}
+          token: ${{ steps.app-token.outputs.token }}
+          path: cfg
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+      - name: Update Applications
+        working-directory: cfg
+        env:
+          TAG_NAME: ${{ inputs.chart_tag_name }}
+          OBS_FILE: ${{ inputs.observer_application_file }}
+          PROD_FILE: ${{ inputs.producer_application_file }}
+          WORK_LIVE: ${{ inputs.worker_live_application_file }}
+          WORK_BACK: ${{ inputs.worker_backfill_application_file }}
+        run: |
+          ver=$(echo "$TAG_NAME" | sed -E 's/^.*-v(.*)$/\1/')
+          echo "CHART_VERSION=$ver" >> $GITHUB_ENV
+          
+          # Update each Application file if provided
+          update_chart_version() {
+            local file="$1"
+            if [ -n "$file" ]; then
+              echo "Updating chart version in $file to v$ver"
+              # Single-source Application
+              yq -i '(.spec.source.repoURL) = "oci://ghcr.io/${{ github.repository_owner }}/charts" | (.spec.source.chart) = "captide-document-engine" | (.spec.source.targetRevision) = strenv(ver)' "$file"
+              # Multi-source Application (update matching chart entry)
+              yq -i '(.spec.sources[] | select(.chart == "captide-document-engine")).targetRevision = strenv(ver)' "$file"
+            fi
+          }
+          
+          update_chart_version "$OBS_FILE"
+          update_chart_version "$PROD_FILE"
+          update_chart_version "$WORK_LIVE"
+          update_chart_version "$WORK_BACK"
+      - name: Create/Update rolling PR (autobump/dev)
+        uses: peter-evans/create-pull-request@v6
+        with:
+          path: cfg
+          token: ${{ steps.app-token.outputs.token }}
+          commit-message: |
+            chore(dev): bump captide-document-engine chart to v${{ env.CHART_VERSION }}
+          title: "chore(dev): bump CDE chart to v${{ env.CHART_VERSION }}"
+          body: |
+            Chart release merged. This updates dev to the new chart version v${{ env.CHART_VERSION }}.
+          branch: autobump/dev
+          delete-branch: false
+          base: ${{ inputs.cluster_config_base }}

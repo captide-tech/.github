@@ -1,0 +1,36 @@
+name: Helm Publish (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      chart_path: { required: true, type: string }
+      chart_name: { required: true, type: string }
+      chart_tag_name: { required: true, type: string }
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+      - name: Extract released version
+        id: v
+        run: |
+          echo "CHART_VERSION=$(echo '${{ inputs.chart_tag_name }}' | sed -E 's/^.*-v(.*)$/\1/')" >> $GITHUB_OUTPUT
+      - name: Login to GHCR (OCI)
+        run: echo ${{ secrets.GITHUB_TOKEN }} | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
+      - name: Helm deps
+        run: helm dependency update "${{ inputs.chart_path }}" || true
+      - name: Package chart
+        run: helm package "${{ inputs.chart_path }}" --version "${{ steps.v.outputs.CHART_VERSION }}"
+      - name: Push chart
+        run: |
+          CHART_PKG=$(ls ${{ inputs.chart_name }}-*.tgz)
+          helm push "$CHART_PKG" oci://ghcr.io/${{ github.repository_owner }}/charts

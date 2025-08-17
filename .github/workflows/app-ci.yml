@@ -1,0 +1,221 @@
+name: App CI (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      components:
+        description: 'JSON array of {component, dockerfile}'
+        required: true
+        type: string
+      push_on_main:
+        description: 'Push images on main branch?'
+        required: false
+        default: true
+        type: boolean
+      cluster_config_repo:
+        description: 'Full name captide-tech/cluster-config (or org/repo)'
+        required: false
+        type: string
+      observer_application_file:
+        required: false
+        type: string
+      producer_application_file:
+        required: false
+        type: string
+      worker_live_application_file:
+        required: false
+        type: string
+      worker_backfill_application_file:
+        required: false
+        type: string
+      cluster_config_base:
+        description: 'Base branch for PRs in cluster-config'
+        required: false
+        default: 'main'
+        type: string
+    secrets:
+      CAPTIDE_APP_ID:
+        required: false
+      CAPTIDE_APP_PRIVATE_KEY:
+        required: false
+
+jobs:
+  build-and-push:
+    name: Build and push images to GHCR
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(inputs.components) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare variables
+        id: vars
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker meta (tags/labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}/${{ matrix.component }}
+          tags: |
+            type=raw,value=${{ steps.vars.outputs.sha_short }}
+            type=ref,event=tag
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: ${{ inputs.push_on_main && github.event_name == 'push' && startsWith(github.ref, 'refs/heads/main') }}
+          platforms: linux/amd64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true
+
+      - name: Write digest artifact
+        if: ${{ inputs.push_on_main && github.event_name == 'push' && startsWith(github.ref, 'refs/heads/main') }}
+        run: |
+          echo '{"component":"${{ matrix.component }}","digest":"${{ steps.build.outputs.digest }}"}' > digest-${{ matrix.component }}.json
+
+      - name: Upload digest artifact
+        if: ${{ inputs.push_on_main && github.event_name == 'push' && startsWith(github.ref, 'refs/heads/main') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.component }}
+          path: digest-${{ matrix.component }}.json
+
+  open-config-pr:
+    name: Open/Update dev PR in cluster-config with image digests
+    runs-on: ubuntu-latest
+    needs: [build-and-push]
+    if: ${{ inputs.cluster_config_repo != '' && inputs.push_on_main && github.event_name == 'push' && startsWith(github.ref, 'refs/heads/main') }}
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Compute repo name
+        id: repo
+        shell: bash
+        run: echo "repo_name=${{ inputs.cluster_config_repo }}" | awk -F/ '{print "repo_name="$$2}' >> $GITHUB_OUTPUT
+
+      - name: Create GitHub App installation token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.CAPTIDE_APP_ID }}
+          private-key: ${{ secrets.CAPTIDE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ steps.repo.outputs.repo_name }}
+
+      - name: Checkout cluster config repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.cluster_config_repo }}
+          token: ${{ steps.app-token.outputs.token }}
+          persist-credentials: true
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - name: Collect digests
+        id: dg
+        shell: bash
+        run: |
+          set -euo pipefail
+          obs=""; prod=""; work=""
+          for f in digests/digest-*.json; do
+            [ -f "$f" ] || continue
+            comp=$(yq -oy '.component' "$f")
+            dig=$(yq -oy '.digest' "$f")
+            case "$comp" in
+              observer) obs="$dig" ;;
+              producer-sec) prod="$dig" ;;
+              worker-sec) work="$dig" ;;
+            esac
+          done
+          echo "observer_digest=$obs" >> $GITHUB_OUTPUT
+          echo "producer_digest=$prod" >> $GITHUB_OUTPUT
+          echo "worker_digest=$work" >> $GITHUB_OUTPUT
+
+      - name: Update observer application
+        if: ${{ inputs.observer_application_file != '' && steps.dg.outputs.observer_digest != '' }}
+        env:
+          DIGEST: ${{ steps.dg.outputs.observer_digest }}
+          REPO: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}/observer
+          FILE: ${{ inputs.observer_application_file }}
+        run: |
+          CURRENT_VALUES=$(yq '.spec.source.helm.values' "$FILE")
+          UPDATED_VALUES=$(echo "$CURRENT_VALUES" | yq ".image.digest = strenv(DIGEST) | .image.repository = strenv(REPO)")
+          yq -i ".spec.source.helm.values = strenv(UPDATED_VALUES)" "$FILE"
+
+      - name: Update producer application
+        if: ${{ inputs.producer_application_file != '' && steps.dg.outputs.producer_digest != '' }}
+        env:
+          DIGEST: ${{ steps.dg.outputs.producer_digest }}
+          REPO: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}/producer-sec
+          FILE: ${{ inputs.producer_application_file }}
+        run: |
+          CURRENT_VALUES=$(yq '.spec.source.helm.values' "$FILE")
+          UPDATED_VALUES=$(echo "$CURRENT_VALUES" | yq ".image.digest = strenv(DIGEST) | .image.repository = strenv(REPO)")
+          yq -i ".spec.source.helm.values = strenv(UPDATED_VALUES)" "$FILE"
+
+      - name: Update worker applications
+        if: ${{ (inputs.worker_live_application_file != '' || inputs.worker_backfill_application_file != '') && steps.dg.outputs.worker_digest != '' }}
+        env:
+          DIGEST: ${{ steps.dg.outputs.worker_digest }}
+          REPO: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}/worker-sec
+          LIVE_FILE: ${{ inputs.worker_live_application_file }}
+          BACK_FILE: ${{ inputs.worker_backfill_application_file }}
+        run: |
+          if [ -n "$LIVE_FILE" ]; then
+            CURRENT_VALUES=$(yq '.spec.source.helm.values' "$LIVE_FILE")
+            UPDATED_VALUES=$(echo "$CURRENT_VALUES" | yq ".image.digest = strenv(DIGEST) | .image.repository = strenv(REPO)")
+            yq -i ".spec.source.helm.values = strenv(UPDATED_VALUES)" "$LIVE_FILE"
+          fi
+          if [ -n "$BACK_FILE" ]; then
+            CURRENT_VALUES=$(yq '.spec.source.helm.values' "$BACK_FILE")
+            UPDATED_VALUES=$(echo "$CURRENT_VALUES" | yq ".image.digest = strenv(DIGEST) | .image.repository = strenv(REPO)")
+            yq -i ".spec.source.helm.values = strenv(UPDATED_VALUES)" "$BACK_FILE"
+          fi
+
+      - name: Create/Update PR (fixed branch)
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: |
+            chore(dev): bump image digests
+          title: "chore(dev): bump image digests"
+          body: |
+            Dev deploy bump. This PR updates per-component image repositories and digests.
+          branch: autobump/dev
+          delete-branch: false
+          base: ${{ inputs.cluster_config_base }}

@@ -1,0 +1,48 @@
+name: Release Please (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      manifest_file:
+        default: .release-please-manifest.json
+        type: string
+      config_file:
+        default: .github/release-please-config.json
+        type: string
+    secrets:
+      CAPTIDE_APP_ID:
+        required: true
+      CAPTIDE_APP_PRIVATE_KEY:
+        required: true
+    outputs:
+      chart_release_created:
+        description: 'Whether chart release created'
+        value: ${{ jobs.rp.outputs.chart_release_created }}
+      chart_tag_name:
+        description: 'Tag name for chart'
+        value: ${{ jobs.rp.outputs.chart_tag_name }}
+
+jobs:
+  rp:
+    runs-on: ubuntu-latest
+    outputs:
+      chart_release_created: ${{ steps.rp.outputs['deploy/helm/captide-document-engine--release_created'] }}
+      chart_tag_name: ${{ steps.rp.outputs['deploy/helm/captide-document-engine--tag_name'] }}
+    steps:
+      - name: Create GitHub App installation token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.CAPTIDE_APP_ID }}
+          private-key: ${{ secrets.CAPTIDE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+      - name: Release Please
+        uses: googleapis/release-please-action@v4
+        with:
+          manifest-file: ${{ inputs.manifest_file }}
+          config-file: ${{ inputs.config_file }}
+          token: ${{ steps.app-token.outputs.token }}
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+        id: rp
