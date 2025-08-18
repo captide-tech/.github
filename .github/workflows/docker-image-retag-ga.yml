@@ -33,6 +33,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validate inputs
+        run: |
+          if [ -z "${{ inputs.release_version }}" ]; then
+            echo "::error::release_version is empty. Gate this job on 'chart_release_created == true' (or pass a non-empty version)."
+            exit 1
+          fi
+          if ! jq -e . >/dev/null 2>&1 <<< '${{ inputs.image_digests_json }}'; then
+            echo "::error::image_digests_json is not valid JSON"
+            exit 1
+          fi
+
       - name: Prepare variables
         id: vars
         run: |
