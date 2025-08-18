@@ -103,7 +103,12 @@ jobs:
               digest=$(jq -r --arg c "$component" '.[$c] // empty' <<< "$IMAGE_DIGESTS")
               
               # Determine tag to stamp (component-specific mapping wins, else release_version, else blank)
-              tag=$(jq -r --arg c "$component" '.[$c] // empty' <<< "${IMAGE_TAGS:-{}}" 2>/dev/null || true)
+              # Ensure IMAGE_TAGS is always valid JSON, even when empty
+              if [ -z "${IMAGE_TAGS:-}" ]; then
+                tag=""
+              else
+                tag=$(jq -r --arg c "$component" '.[$c] // empty' <<< "$IMAGE_TAGS" 2>/dev/null || echo "")
+              fi
               if [ -z "${tag:-}" ] && [ -n "${RELEASE_VERSION:-}" ]; then
                 tag="$RELEASE_VERSION"
               fi
