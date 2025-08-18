@@ -52,4 +52,5 @@ jobs:
       - name: Debug Release Please outputs
         run: |
           echo "All Release Please outputs:"
-          printf '%s\n' "${{ toJson(steps.rp.outputs) }}"
+          echo "release_created: ${{ steps.rp.outputs.release_created }}"
+          echo "tag_name: ${{ steps.rp.outputs.tag_name }}"
