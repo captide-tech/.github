@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       components:
-        description: 'JSON array of {component, dockerfile}'
+        description: 'JSON array of {component, dockerfile, application_files}'
         required: true
         type: string
       push_on_main:
@@ -13,19 +13,7 @@ on:
         default: true
         type: boolean
       cluster_config_repo:
-        description: 'Full name captide-tech/cluster-config (or org/repo)'
-        required: false
-        type: string
-      observer_application_file:
-        required: false
-        type: string
-      producer_application_file:
-        required: false
-        type: string
-      worker_live_application_file:
-        required: false
-        type: string
-      worker_backfill_application_file:
+        description: 'Full name org/repo of cluster-config'
         required: false
         type: string
       cluster_config_base:
@@ -147,66 +135,60 @@ jobs:
           pattern: digest-*
           merge-multiple: true
 
-      - name: Collect digests
+      - name: Collect digests dynamically
         id: dg
         shell: bash
         run: |
           set -euo pipefail
-          obs=""; prod=""; work=""
+          # Create a JSON object with all component digests
+          echo '{' > digests.json
+          first=true
           for f in digests/digest-*.json; do
             [ -f "$f" ] || continue
             comp=$(yq -oy '.component' "$f")
             dig=$(yq -oy '.digest' "$f")
-            case "$comp" in
-              observer) obs="$dig" ;;
-              producer-sec) prod="$dig" ;;
-              worker-sec) work="$dig" ;;
-            esac
+            if [ "$first" = true ]; then
+              first=false
+            else
+              echo ',' >> digests.json
+            fi
+            echo "  \"$comp\": \"$dig\"" >> digests.json
           done
-          echo "observer_digest=$obs" >> $GITHUB_OUTPUT
-          echo "producer_digest=$prod" >> $GITHUB_OUTPUT
-          echo "worker_digest=$work" >> $GITHUB_OUTPUT
+          echo '}' >> digests.json
+          
+          # Store the JSON for later use
+          echo "digests_json=$(cat digests.json | jq -c .)" >> $GITHUB_OUTPUT
 
-      - name: Update observer application
-        if: ${{ inputs.observer_application_file != '' && steps.dg.outputs.observer_digest != '' }}
+      - name: Update Applications dynamically
         env:
-          DIGEST: ${{ steps.dg.outputs.observer_digest }}
-          REPO: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}/observer
-          FILE: ${{ inputs.observer_application_file }}
+          COMPONENTS: ${{ inputs.components }}
+          DIGESTS_JSON: ${{ steps.dg.outputs.digests_json }}
         run: |
-          CURRENT_VALUES=$(yq '.spec.source.helm.values' "$FILE")
-          UPDATED_VALUES=$(echo "$CURRENT_VALUES" | yq ".image.digest = strenv(DIGEST) | .image.repository = strenv(REPO)")
-          yq -i ".spec.source.helm.values = strenv(UPDATED_VALUES)" "$FILE"
-
-      - name: Update producer application
-        if: ${{ inputs.producer_application_file != '' && steps.dg.outputs.producer_digest != '' }}
-        env:
-          DIGEST: ${{ steps.dg.outputs.producer_digest }}
-          REPO: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}/producer-sec
-          FILE: ${{ inputs.producer_application_file }}
-        run: |
-          CURRENT_VALUES=$(yq '.spec.source.helm.values' "$FILE")
-          UPDATED_VALUES=$(echo "$CURRENT_VALUES" | yq ".image.digest = strenv(DIGEST) | .image.repository = strenv(REPO)")
-          yq -i ".spec.source.helm.values = strenv(UPDATED_VALUES)" "$FILE"
-
-      - name: Update worker applications
-        if: ${{ (inputs.worker_live_application_file != '' || inputs.worker_backfill_application_file != '') && steps.dg.outputs.worker_digest != '' }}
-        env:
-          DIGEST: ${{ steps.dg.outputs.worker_digest }}
-          REPO: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}/worker-sec
-          LIVE_FILE: ${{ inputs.worker_live_application_file }}
-          BACK_FILE: ${{ inputs.worker_backfill_application_file }}
-        run: |
-          if [ -n "$LIVE_FILE" ]; then
-            CURRENT_VALUES=$(yq '.spec.source.helm.values' "$LIVE_FILE")
-            UPDATED_VALUES=$(echo "$CURRENT_VALUES" | yq ".image.digest = strenv(DIGEST) | .image.repository = strenv(REPO)")
-            yq -i ".spec.source.helm.values = strenv(UPDATED_VALUES)" "$LIVE_FILE"
-          fi
-          if [ -n "$BACK_FILE" ]; then
-            CURRENT_VALUES=$(yq '.spec.source.helm.values' "$BACK_FILE")
-            UPDATED_VALUES=$(echo "$CURRENT_VALUES" | yq ".image.digest = strenv(DIGEST) | .image.repository = strenv(REPO)")
-            yq -i ".spec.source.helm.values = strenv(UPDATED_VALUES)" "$BACK_FILE"
-          fi
+          # Parse components and update each application file
+          echo "$COMPONENTS" | jq -c '.[]' | while read -r component_data; do
+            component=$(echo "$component_data" | jq -r '.component')
+            application_files=$(echo "$component_data" | jq -r '.application_files // empty')
+            
+            if [ -n "$application_files" ]; then
+              digest=$(echo "$DIGESTS_JSON" | jq -r ".$component // empty")
+              
+              if [ -n "$digest" ]; then
+                echo "Processing component: $component with digest: $digest"
+                
+                # Update each application file for this component
+                echo "$application_files" | jq -r '.[]' | while read -r app_file; do
+                  if [ -n "$app_file" ] && [ -f "$app_file" ]; then
+                    echo "Updating $app_file for component $component"
+                    repo="ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}/$component"
+                    
+                    CURRENT_VALUES=$(yq '.spec.source.helm.values' "$app_file")
+                    UPDATED_VALUES=$(echo "$CURRENT_VALUES" | yq ".image.digest = \"$digest\" | .image.repository = \"$repo\"")
+                    yq -i ".spec.source.helm.values = strenv(UPDATED_VALUES)" "$app_file"
+                  fi
+                done
+              fi
+            fi
+          done
 
       - name: Create/Update PR (fixed branch)
         uses: peter-evans/create-pull-request@v6

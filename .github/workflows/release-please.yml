@@ -9,6 +9,10 @@ on:
       config_file:
         default: .github/release-please-config.json
         type: string
+      release_type:
+        description: 'Type of release: rc or ga'
+        default: 'rc'
+        type: string
     secrets:
       CAPTIDE_APP_ID:
         required: true
@@ -43,6 +47,7 @@ jobs:
           manifest-file: ${{ inputs.manifest_file }}
           config-file: ${{ inputs.config_file }}
           token: ${{ steps.app-token.outputs.token }}
+          release-type: ${{ inputs.release_type }}
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
         id: rp

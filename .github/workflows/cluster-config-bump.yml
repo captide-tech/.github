@@ -7,17 +7,9 @@ on:
         description: 'Full name org/repo of cluster-config'
         required: true
         type: string
-      observer_application_file:
-        required: false
-        type: string
-      producer_application_file:
-        required: false
-        type: string
-      worker_live_application_file:
-        required: false
-        type: string
-      worker_backfill_application_file:
-        required: false
+      application_files:
+        description: 'JSON array of application file paths to update'
+        required: true
         type: string
       chart_tag_name:
         description: 'Tag name emitted by Release Please for the chart'
@@ -71,30 +63,21 @@ jobs:
         working-directory: cfg
         env:
           TAG_NAME: ${{ inputs.chart_tag_name }}
-          OBS_FILE: ${{ inputs.observer_application_file }}
-          PROD_FILE: ${{ inputs.producer_application_file }}
-          WORK_LIVE: ${{ inputs.worker_live_application_file }}
-          WORK_BACK: ${{ inputs.worker_backfill_application_file }}
+          APPLICATION_FILES: ${{ inputs.application_files }}
         run: |
           ver=$(echo "$TAG_NAME" | sed -E 's/^.*-v(.*)$/\1/')
           echo "CHART_VERSION=$ver" >> $GITHUB_ENV
           
-          # Update each Application file if provided
-          update_chart_version() {
-            local file="$1"
-            if [ -n "$file" ]; then
-              echo "Updating chart version in $file to v$ver"
+          # Update each application file
+          echo "$APPLICATION_FILES" | jq -r '.[]' | while read -r app_file; do
+            if [ -n "$app_file" ] && [ -f "$app_file" ]; then
+              echo "Updating chart version in $app_file to v$ver"
               # Single-source Application
-              yq -i '(.spec.source.repoURL) = "oci://ghcr.io/${{ github.repository_owner }}/charts" | (.spec.source.chart) = "captide-document-engine" | (.spec.source.targetRevision) = strenv(ver)' "$file"
+              yq -i '(.spec.source.repoURL) = "oci://ghcr.io/${{ github.repository_owner }}/charts" | (.spec.source.chart) = "captide-document-engine" | (.spec.source.targetRevision) = strenv(ver)' "$app_file"
               # Multi-source Application (update matching chart entry)
-              yq -i '(.spec.sources[] | select(.chart == "captide-document-engine")).targetRevision = strenv(ver)' "$file"
+              yq -i '(.spec.sources[] | select(.chart == "captide-document-engine")).targetRevision = strenv(ver)' "$app_file"
             fi
-          }
-          
-          update_chart_version "$OBS_FILE"
-          update_chart_version "$PROD_FILE"
-          update_chart_version "$WORK_LIVE"
-          update_chart_version "$WORK_BACK"
+          done
       - name: Create/Update rolling PR (autobump/dev)
         uses: peter-evans/create-pull-request@v6
         with:
