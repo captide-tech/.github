@@ -11,10 +11,18 @@ on:
         description: 'Type of release: rc or ga'
         default: 'rc'
         type: string
+      release_version:
+        description: 'Exact version to use for tags, e.g. 1.8.0-rc.1 or 1.8.0'
+        required: true
+        type: string
       image_digests_json:
         description: 'JSON object of component -> image digest'
         required: true
         type: string
+    outputs:
+      tags-json:
+        description: 'JSON object of component -> version'
+        value: ${{ jobs.emit-tags.outputs.tags-json }}
 
 jobs:
   retag-images:
@@ -29,16 +37,8 @@ jobs:
         id: vars
         run: |
           echo "sha_short=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
-          ver=$(echo "$GITHUB_REF_NAME" | sed -E 's/^.*-v(.*)$/\1/')
-          echo "ver=$ver" >> $GITHUB_OUTPUT
-          echo "ver_mm=$(echo "$ver" | awk -F. '{print $1"."$2}')" >> $GITHUB_OUTPUT
-          
-          # Add RC suffix if this is an RC release
-          if [ "${{ inputs.release_type }}" = "rc" ]; then
-            echo "ver_rc=${ver}-rc" >> $GITHUB_OUTPUT
-          else
-            echo "ver_rc=$ver" >> $GITHUB_OUTPUT
-          fi
+          echo "ver=${{ inputs.release_version }}" >> $GITHUB_OUTPUT
+          echo "ver_mm=$(echo "${{ inputs.release_version }}" | sed -E 's/-rc.*$//' | awk -F. '{print $1"."$2}')" >> $GITHUB_OUTPUT
 
       - uses: docker/login-action@v3
         with:
@@ -66,10 +66,24 @@ jobs:
           
           if [ "${{ inputs.release_type }}" = "rc" ]; then
             # Create RC tags
-            docker buildx imagetools create --tag "$DST_BASE:${{ steps.vars.outputs.ver_rc }}" "$SRC"
+            docker buildx imagetools create --tag "$DST_BASE:${{ steps.vars.outputs.ver }}" "$SRC"
             docker buildx imagetools create --tag "$DST_BASE:${{ steps.vars.outputs.ver_mm }}-rc" "$SRC"
           else
             # Create GA tags
             docker buildx imagetools create --tag "$DST_BASE:${{ steps.vars.outputs.ver }}" "$SRC"
             docker buildx imagetools create --tag "$DST_BASE:${{ steps.vars.outputs.ver_mm }}" "$SRC"
           fi
+
+  emit-tags:
+    needs: retag-images
+    runs-on: ubuntu-latest
+    outputs:
+      tags-json: ${{ steps.tags.outputs.tags_json }}
+    steps:
+      - name: Emit tags map
+        id: tags
+        run: |
+          echo '${{ inputs.components }}' | jq -c --arg v '${{ inputs.release_version }}' '
+            map({(.component): $v}) | add
+          ' > tags.json
+          echo "tags_json=$(cat tags.json)" >> $GITHUB_OUTPUT

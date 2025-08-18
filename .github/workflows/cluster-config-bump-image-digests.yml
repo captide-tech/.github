@@ -11,6 +11,15 @@ on:
         description: 'JSON object of component -> image digest'
         required: true
         type: string
+      # NEW (either/or, pick what fits you best):
+      release_version:
+        description: 'Semver to stamp as image tag (e.g., 1.8.0-rc.1)'
+        required: false
+        type: string
+      image_tags_json:
+        description: 'JSON: component -> image tag (e.g., {"api":"1.8.0-rc.1"})'
+        required: false
+        type: string
       environment:
         description: 'Target environment (e.g., dev)'
         required: false
@@ -70,6 +79,10 @@ jobs:
 
       - name: Update Applications
         working-directory: cfg
+        env:
+          IMAGE_DIGESTS: ${{ inputs.image_digests_json }}
+          IMAGE_TAGS: ${{ inputs.image_tags_json }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
         run: |
           set -euo pipefail
           
@@ -85,10 +98,16 @@ jobs:
             application_files=$(echo "$component_data" | jq -r '.application_files // empty')
             
             if [ -n "$application_files" ]; then
-              digest=$(echo "${{ inputs.image_digests_json }}" | jq -r ".$component // empty")
+              digest=$(echo "$IMAGE_DIGESTS" | jq -r ".$component // empty")
+              
+              # Determine tag to stamp (component-specific mapping wins, else release_version, else blank)
+              tag=$(echo "$IMAGE_TAGS" | jq -r --arg c "$component" '.[$c] // empty' 2>/dev/null || true)
+              if [ -z "${tag:-}" ] && [ -n "${RELEASE_VERSION:-}" ]; then
+                tag="$RELEASE_VERSION"
+              fi
               
               if [ -n "$digest" ] && [ "$digest" != "null" ]; then
-                echo "Processing component: $component with digest: $digest"
+                echo "Processing component: $component with digest: $digest${tag:+ and tag: $tag}"
                 
                 # Update each application file for this component
                 echo "$application_files" | jq -r '.[]' | while read -r app_file; do
@@ -96,12 +115,13 @@ jobs:
                     echo "Updating $app_file for component $component"
                     repo="ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}/$component"
                     
-                    # Update the application file using yq with fromyaml/toyaml
-                    DIGEST="$digest" REPO="$repo" yq -i '
+                    # Always set repo + digest; set tag/labels only if we have a tag
+                    REPO="$repo" DIGEST="$digest" TAG="${tag:-}" yq -i '
                       .spec.source.helm.values |=
                         (. | fromyaml
-                           | .image.digest = env(DIGEST)
                            | .image.repository = env(REPO)
+                           | .image.digest = env(DIGEST)
+                           | (env(TAG) | select(length>0) as $t | .image.tag = $t | .podLabels."app.kubernetes.io/version" = $t) // .
                            | toyaml)
                     ' "$app_file"
                   else
@@ -125,7 +145,7 @@ jobs:
           fi
           
           if [ -z "${{ inputs.pr_body }}" ]; then
-            echo "pr_body=${{ inputs.environment }} deploy bump. This PR updates per-component image repositories and digests." >> $GITHUB_OUTPUT
+            echo "pr_body=${{ inputs.environment }} deploy bump. This PR updates per-component image repositories, digests, and human-readable tags." >> $GITHUB_OUTPUT
           else
             echo "pr_body=${{ inputs.pr_body }}" >> $GITHUB_OUTPUT
           fi

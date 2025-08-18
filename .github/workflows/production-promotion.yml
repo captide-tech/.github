@@ -67,6 +67,7 @@ jobs:
               chart_ver=$(yq '.spec.source.targetRevision' "$dev_file")
               image_digest=$(yq '.spec.source.helm.values | fromyaml | .image.digest' "$dev_file")
               image_repo=$(yq '.spec.source.helm.values | fromyaml | .image.repository' "$dev_file")
+              image_tag=$(yq '.spec.source.helm.values | fromyaml | .image.tag' "$dev_file")
               
               # Compute corresponding prod file path
               prod_file="${dev_file/clusters\/dev/clusters\/prod}"
@@ -76,14 +77,14 @@ jobs:
               else
                 echo ',' >> dev-versions.json
               fi
-              echo "  \"$prod_file\": {\"chart_version\": \"$chart_ver\", \"image_digest\": \"$image_digest\", \"image_repo\": \"$image_repo\"}" >> dev-versions.json
+              echo "  \"$prod_file\": {\"chart_version\": \"$chart_ver\", \"image_digest\": \"$image_digest\", \"image_repo\": \"$image_repo\", \"image_tag\": \"$image_tag\"}" >> dev-versions.json
             fi
           done
           echo "}" >> dev-versions.json
           
           # Store for later use
           echo "dev_versions=$(cat dev-versions.json | jq -c .)" >> $GITHUB_OUTPUT
-      
+
       - name: Update production with dev versions
         working-directory: cfg
         env:
@@ -98,6 +99,14 @@ jobs:
               chart_ver=$(echo "$DEV_VERSIONS" | jq -r ".$prod_file.chart_version")
               image_digest=$(echo "$DEV_VERSIONS" | jq -r ".$prod_file.image_digest")
               image_repo=$(echo "$DEV_VERSIONS" | jq -r ".$prod_file.image_repo")
+              image_tag=$(echo "$DEV_VERSIONS" | jq -r ".$prod_file.image_tag")
+              
+              # Sanitize image_tag to avoid writing "null" string
+              if [ "$image_tag" = "null" ] || [ -z "$image_tag" ]; then
+                tag_env=""
+              else
+                tag_env="$image_tag"
+              fi
               
               if [ "$chart_ver" != "null" ] && [ -n "$chart_ver" ]; then
                 # Update chart version
@@ -106,11 +115,12 @@ jobs:
               
               if [ "$image_digest" != "null" ] && [ -n "$image_digest" ]; then
                 # Update image digest and repository using yq with fromyaml/toyaml
-                DIGEST="$image_digest" REPO="$image_repo" yq -i '
+                DIGEST="$image_digest" REPO="$image_repo" TAG="$tag_env" yq -i '
                   .spec.source.helm.values |=
                     (. | fromyaml
                        | .image.digest = env(DIGEST)
                        | .image.repository = env(REPO)
+                       | (env(TAG) | select(length>0) as $t | .image.tag = $t | .podLabels."app.kubernetes.io/version" = $t) // .
                        | toyaml)
                 ' "$prod_file"
               fi

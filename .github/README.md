@@ -10,34 +10,35 @@ This repository contains our reusable GitHub Actions workflows for consistent CI
 - **Trigger**: PR to `main` branch
 - **Process**: 
   1. Build and push Docker images with SHA tags
-  2. Update dev cluster with new image digests
-  3. Release Please creates semantic versions
-  4. Build and publish Helm charts with RC tags
-  5. Update dev cluster with new chart versions
+  2. Release Please creates semantic versions
+  3. Retag images with RC semantic versions
+  4. Update dev cluster with new image digests + human-readable tags
+  5. Build and publish Helm charts with RC tags
+  6. Update dev cluster with new chart versions
 - **Result**: Auto-merged PRs to dev cluster on green checks
 
 ### GA Promotion (Manual)
 - **Trigger**: Manual workflow dispatch in app repo
 - **Process**:
-  1. Extract current dev versions (chart + image digests)
+  1. Extract current dev versions (chart + image digests + tags)
   2. Retag Docker images with GA semantic versions
   3. Create GA Helm chart release via Release Please
   4. Build and publish GA chart
-  5. Promote dev versions to production cluster
+  5. Promote dev versions to production cluster (including tags)
 - **Result**: PR to production cluster for manual review
 
 ## Workflow Templates
 
 ### Docker & Images
 - **`docker-build-and-push.yml`**: Build multi-component Docker images, push to GHCR with SHA tags, output digests
-- **`docker-image-retag-ga.yml`**: Retag existing images with semantic versions (RC/GA) using digests as source
+- **`docker-image-retag-ga.yml`**: Retag existing images with semantic versions (RC/GA) using digests as source, outputs component→version mapping
 
 ### Helm Charts
 - **`helm-chart-build-and-publish.yml`**: Build and publish Helm charts to OCI registry
 - **`release-please.yml`**: Semantic versioning and release management using Release Please
 
 ### Cluster Configuration
-- **`cluster-config-bump-image-digests.yml`**: Update ArgoCD applications with new image digests (dev)
+- **`cluster-config-bump-image-digests.yml`**: Update ArgoCD applications with new image digests + human-readable tags (dev)
 - **`cluster-config-bump-chart-version.yml`**: Update ArgoCD applications with new chart versions (dev)
 - **`production-promotion.yml`**: Promote dev versions to production cluster (dev → prod mapping)
 
@@ -69,3 +70,12 @@ This repository contains our reusable GitHub Actions workflows for consistent CI
 - **RC**: New chart package with `-rc` suffix
 - **GA**: New chart package from same commit (not retagging)
 - **Signing**: Use `--sign` for production charts
+
+### Changelog Management
+- **App Changelog**: `CHANGELOG.md` in repository root
+- **Chart Changelog**: `deploy/helm/{app-name}/CHANGELOG.md`
+- **Release Please Configs**: 
+  - `.github/release-please-rc.json` for RC releases
+  - `.github/release-please-ga.json` for GA releases
+- **Conventional Commits**: Use `feat:`, `fix:`, `breaking:` prefixes for automatic changelog generation
+- **Separate PRs**: Each package (app/chart) gets its own release PR when changes are detected
