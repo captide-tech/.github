@@ -36,11 +36,12 @@ This repository contains our reusable GitHub Actions workflows for consistent CI
 ### Helm Charts
 - **`helm-chart-build-and-publish.yml`**: Build and publish Helm charts to OCI registry
 - **`release-please.yml`**: Semantic versioning and release management using Release Please
+- **`release-please-enable-automerge.yml`**: Enable auto-merge on Release Please PRs (reusable)
 
 ### Cluster Configuration
 - **`cluster-config-bump-image-digests.yml`**: Update ArgoCD applications with new image digests + human-readable tags (dev)
 - **`cluster-config-bump-chart-version.yml`**: Update ArgoCD applications with new chart versions (dev)
-- **`production-promotion.yml`**: Promote dev versions to production cluster (dev → prod mapping)
+- **`production-promotion.yml`**: Promote dev versions to production cluster (dev → prod mapping, including tags)
 
 ## Usage
 
