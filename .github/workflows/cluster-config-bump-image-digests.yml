@@ -85,59 +85,55 @@ jobs:
           IMAGE_DIGESTS: ${{ inputs.image_digests_json }}
           IMAGE_TAGS: ${{ inputs.image_tags_json }}
           RELEASE_VERSION: ${{ inputs.release_version }}
+          COMPONENTS_MATRIX: ${{ inputs.components_matrix }}
         run: |
           set -euo pipefail
           
           # Validate inputs
-          if [ -z "${{ inputs.components_matrix }}" ] || [ -z "${{ inputs.image_digests_json }}" ]; then
+          if [ -z "$COMPONENTS_MATRIX" ] || [ -z "$IMAGE_DIGESTS" ]; then
             echo "Error: Missing required inputs"
             exit 1
           fi
           
-          # Process each component
-          echo "${{ inputs.components_matrix }}" | jq -c '.[]' | while read -r component_data; do
-            component=$(echo "$component_data" | jq -r '.component')
-            application_files=$(echo "$component_data" | jq -r '.application_files // empty')
+          # Iterate components safely
+          jq -c '.[]' <<< "$COMPONENTS_MATRIX" | while read -r component_data; do
+            component=$(jq -r '.component' <<< "$component_data")
             
-            if [ -n "$application_files" ] && [ "$application_files" != "null" ]; then
-              digest=$(jq -r --arg c "$component" '.[$c] // empty' <<< "$IMAGE_DIGESTS")
+            digest=$(jq -r --arg c "$component" '.[$c] // empty' <<< "$IMAGE_DIGESTS")
+            
+            # decide tag (component-specific > release_version)
+            if [ -z "${IMAGE_TAGS:-}" ]; then
+              tag=""
+            else
+              tag=$(jq -r --arg c "$component" '.[$c] // empty' <<< "$IMAGE_TAGS" 2>/dev/null || echo "")
+            fi
+            if [ -z "$tag" ] && [ -n "${RELEASE_VERSION:-}" ]; then
+              tag="$RELEASE_VERSION"
+            fi
+            
+            if [ -n "$digest" ] && [ "$digest" != "null" ]; then
+              echo "Processing component: $component with digest: $digest${tag:+ and tag: $tag}"
               
-              # Determine tag to stamp (component-specific mapping wins, else release_version, else blank)
-              # Ensure IMAGE_TAGS is always valid JSON, even when empty
-              if [ -z "${IMAGE_TAGS:-}" ]; then
-                tag=""
-              else
-                tag=$(jq -r --arg c "$component" '.[$c] // empty' <<< "$IMAGE_TAGS" 2>/dev/null || echo "")
-              fi
-              if [ -z "${tag:-}" ] && [ -n "${RELEASE_VERSION:-}" ]; then
-                tag="$RELEASE_VERSION"
-              fi
-              
-              if [ -n "$digest" ] && [ "$digest" != "null" ]; then
-                echo "Processing component: $component with digest: $digest${tag:+ and tag: $tag}"
+              # Iterate application files directly from JSON
+              jq -r '.application_files[]?' <<< "$component_data" | while read -r app_file; do
+                [ -z "$app_file" ] && continue
+                [ ! -f "$app_file" ] && { echo "Warning: $app_file not found"; continue; }
                 
-                # Update each application file for this component
-                echo "$component_data" | jq -r '.application_files[]?' | while read -r app_file; do
-                  if [ -n "$app_file" ] && [ -f "$app_file" ]; then
-                    echo "Updating $app_file for component $component"
-                    repo="ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}/$component"
-                    
-                    # Always set repo + digest; set tag/labels only if we have a tag
-                    REPO="$repo" DIGEST="$digest" TAG="${tag:-}" yq -i '
-                      .spec.source.helm.values |=
-                        (. | fromyaml
-                           | .image.repository = env(REPO)
-                           | .image.digest = env(DIGEST)
-                           | (env(TAG) | select(length>0) as $t | .image.tag = $t | .podLabels."app.kubernetes.io/version" = $t) // .
-                           | toyaml)
-                    ' "$app_file"
-                  else
-                    echo "Warning: Application file $app_file not found or empty"
-                  fi
-                done
-              else
-                echo "Warning: No digest found for component $component"
-              fi
+                echo "Updating $app_file for component $component"
+                repo="ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}/$component"
+                
+                # Always set repo + digest; set tag/labels only if we have a tag
+                REPO="$repo" DIGEST="$digest" TAG="${tag:-}" yq -i '
+                  .spec.source.helm.values |=
+                    (. | fromyaml
+                       | .image.repository = env(REPO)
+                       | .image.digest = env(DIGEST)
+                       | (env(TAG) | select(length>0) as $t | .image.tag = $t | .podLabels."app.kubernetes.io/version" = $t) // .
+                       | toyaml)
+                ' "$app_file"
+              done
+            else
+              echo "Warning: No digest found for component $component"
             fi
           done
 
