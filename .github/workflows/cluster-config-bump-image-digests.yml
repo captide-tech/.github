@@ -99,7 +99,7 @@ jobs:
             component=$(echo "$component_data" | jq -r '.component')
             application_files=$(echo "$component_data" | jq -r '.application_files // empty')
             
-            if [ -n "$application_files" ]; then
+            if [ -n "$application_files" ] && [ "$application_files" != "null" ]; then
               digest=$(jq -r --arg c "$component" '.[$c] // empty' <<< "$IMAGE_DIGESTS")
               
               # Determine tag to stamp (component-specific mapping wins, else release_version, else blank)
@@ -117,7 +117,7 @@ jobs:
                 echo "Processing component: $component with digest: $digest${tag:+ and tag: $tag}"
                 
                 # Update each application file for this component
-                echo "$application_files" | jq -r '.[]' | while read -r app_file; do
+                echo "$component_data" | jq -r '.application_files[]?' | while read -r app_file; do
                   if [ -n "$app_file" ] && [ -f "$app_file" ]; then
                     echo "Updating $app_file for component $component"
                     repo="ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}/$component"
