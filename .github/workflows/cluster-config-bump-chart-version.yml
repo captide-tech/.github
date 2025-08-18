@@ -1,0 +1,101 @@
+name: 'Cluster Config: Bump Chart Version (reusable)'
+
+on:
+  workflow_call:
+    inputs:
+      argo_application_files:
+        description: 'JSON array of Argo Application manifest paths to update'
+        required: true
+        type: string
+      chart_release_tag:
+        description: 'Release Please tag for the chart (e.g., cde-chart-v1.8.0)'
+        required: true
+        type: string
+      environment:
+        description: 'Target environment (e.g., dev)'
+        required: false
+        default: 'dev'
+        type: string
+      app_name:
+        description: 'Logical app name (e.g., captide-document-engine)'
+        required: true
+        type: string
+    secrets:
+      CAPTIDE_APP_ID:
+        required: true
+      CAPTIDE_APP_PRIVATE_KEY:
+        required: true
+
+jobs:
+  bump:
+    name: Bump ${{ inputs.environment }} Applications to new chart version
+    runs-on: ubuntu-latest
+    concurrency:
+      group: autobump-${{ inputs.environment }}-${{ inputs.app_name }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Compute repo name
+        id: repo
+        shell: bash
+        run: echo "repo_name=captide-cluster-config" >> $GITHUB_OUTPUT
+      
+      - name: Create GitHub App installation token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.CAPTIDE_APP_ID }}
+          private-key: ${{ secrets.CAPTIDE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ steps.repo.outputs.repo_name }}
+      
+      - name: Checkout cluster config
+        uses: actions/checkout@v4
+        with:
+          repository: captide-tech/captide-cluster-config
+          token: ${{ steps.app-token.outputs.token }}
+          path: cfg
+      
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+      
+      - name: Update Applications
+        working-directory: cfg
+        env:
+          TAG_NAME: ${{ inputs.chart_release_tag }}
+          APPLICATION_FILES: ${{ inputs.argo_application_files }}
+        run: |
+          chart_version=$(echo "$TAG_NAME" | sed -E 's/^.*-v(.*)$/\1/')
+          echo "CHART_VERSION=$chart_version" >> $GITHUB_ENV
+          
+          # Update each application file
+          echo "$APPLICATION_FILES" | jq -r '.[]' | while read -r app_file; do
+            if [ -n "$app_file" ] && [ -f "$app_file" ]; then
+              echo "Updating chart version in $app_file to v$chart_version"
+              # Single-source Application
+              yq -i '(.spec.source.repoURL) = "oci://ghcr.io/${{ github.repository_owner }}/charts" | (.spec.source.chart) = "${{ inputs.app_name }}" | (.spec.source.targetRevision) = strenv(chart_version)' "$app_file"
+              # Multi-source Application (update matching chart entry)
+              yq -i '(.spec.sources[] | select(.chart == "${{ inputs.app_name }}")).targetRevision = strenv(chart_version)' "$app_file"
+            fi
+          done
+      
+      - name: Create/Update rolling PR
+        uses: peter-evans/create-pull-request@v6
+        with:
+          path: cfg
+          token: ${{ steps.app-token.outputs.token }}
+          commit-message: |
+            chore(${{ inputs.environment }}): bump ${{ inputs.app_name }} chart to v${{ env.CHART_VERSION }}
+          title: "chore(${{ inputs.environment }}): bump ${{ inputs.app_name }}"
+          body: |
+            Chart release merged. This updates ${{ inputs.environment }} to the new chart version v${{ env.CHART_VERSION }}.
+          branch: autobump/${{ inputs.environment }}/${{ inputs.app_name }}
+          delete-branch: false
+          base: main
+          labels: |
+            auto-merge:${{ inputs.environment }}
+            area:charts

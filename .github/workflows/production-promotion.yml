@@ -1,24 +1,15 @@
-name: GA Promotion (reusable)
+name: 'Production: Promote from Dev (reusable)'
 
 on:
   workflow_call:
     inputs:
-      cluster_config_repo:
-        description: 'Full name org/repo of cluster-config'
-        required: true
-        type: string
-      application_files:
-        description: 'JSON array of application file paths to update in production'
+      dev_application_files:
+        description: 'JSON array of dev application file paths used as source'
         required: true
         type: string
       chart_name:
         description: 'Chart name for promotion'
         required: true
-        type: string
-      cluster_config_base:
-        description: 'Base branch for PR'
-        required: false
-        default: 'main'
         type: string
     secrets:
       CAPTIDE_APP_ID:
@@ -27,8 +18,8 @@ on:
         required: true
 
 jobs:
-  promote-to-ga:
-    name: Promote RC to GA and update production
+  promote-to-production:
+    name: Promote from Dev to Production
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -38,7 +29,7 @@ jobs:
       - name: Compute repo name
         id: repo
         shell: bash
-        run: echo "repo_name=${{ inputs.cluster_config_repo }}" | awk -F/ '{print "repo_name="$$2}' >> $GITHUB_OUTPUT
+        run: echo "repo_name=captide-cluster-config" >> $GITHUB_OUTPUT
       
       - name: Create GitHub App installation token
         id: app-token
@@ -52,7 +43,7 @@ jobs:
       - name: Checkout cluster config
         uses: actions/checkout@v4
         with:
-          repository: ${{ inputs.cluster_config_repo }}
+          repository: captide-tech/captide-cluster-config
           token: ${{ steps.app-token.outputs.token }}
           path: cfg
       
@@ -61,28 +52,31 @@ jobs:
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
       
-      - name: Get current dev versions
+      - name: Extract current dev versions
         working-directory: cfg
         id: dev-versions
         env:
-          APPLICATION_FILES: ${{ inputs.application_files }}
+          APPLICATION_FILES: ${{ inputs.dev_application_files }}
         run: |
           # Extract current versions from dev applications
           echo "{" > dev-versions.json
           first=true
-          echo "$APPLICATION_FILES" | jq -r '.[]' | while read -r app_file; do
-            if [ -n "$app_file" ] && [ -f "$app_file" ]; then
-              # Get current chart version and image digest
-              chart_ver=$(yq '.spec.source.targetRevision' "$app_file")
-              image_digest=$(yq '.spec.source.helm.values | fromyaml | .image.digest' "$app_file")
-              image_repo=$(yq '.spec.source.helm.values | fromyaml | .image.repository' "$app_file")
+          echo "$APPLICATION_FILES" | jq -r '.[]' | while read -r dev_file; do
+            if [ -n "$dev_file" ] && [ -f "$dev_file" ]; then
+              # Get current chart version and image digest from dev
+              chart_ver=$(yq '.spec.source.targetRevision' "$dev_file")
+              image_digest=$(yq '.spec.source.helm.values | fromyaml | .image.digest' "$dev_file")
+              image_repo=$(yq '.spec.source.helm.values | fromyaml | .image.repository' "$dev_file")
+              
+              # Compute corresponding prod file path
+              prod_file="${dev_file/clusters\/dev/clusters\/prod}"
               
               if [ "$first" = true ]; then
                 first=false
               else
                 echo ',' >> dev-versions.json
               fi
-              echo "  \"$app_file\": {\"chart_version\": \"$chart_ver\", \"image_digest\": \"$image_digest\", \"image_repo\": \"$image_repo\"}" >> dev-versions.json
+              echo "  \"$prod_file\": {\"chart_version\": \"$chart_ver\", \"image_digest\": \"$image_digest\", \"image_repo\": \"$image_repo\"}" >> dev-versions.json
             fi
           done
           echo "}" >> dev-versions.json
@@ -90,37 +84,42 @@ jobs:
           # Store for later use
           echo "dev_versions=$(cat dev-versions.json | jq -c .)" >> $GITHUB_OUTPUT
       
-      - name: Update production applications
+      - name: Update production with dev versions
         working-directory: cfg
         env:
-          APPLICATION_FILES: ${{ inputs.application_files }}
           DEV_VERSIONS: ${{ steps.dev-versions.outputs.dev_versions }}
         run: |
           # Update each production application with dev versions
-          echo "$APPLICATION_FILES" | jq -r '.[]' | while read -r app_file; do
-            if [ -n "$app_file" ] && [ -f "$app_file" ]; then
-              echo "Updating production $app_file with dev versions"
+          echo "$DEV_VERSIONS" | jq -r 'keys[]' | while read -r prod_file; do
+            if [ -n "$prod_file" ] && [ -f "$prod_file" ]; then
+              echo "Updating production $prod_file with dev versions"
               
               # Get dev versions for this file
-              chart_ver=$(echo "$DEV_VERSIONS" | jq -r ".$app_file.chart_version")
-              image_digest=$(echo "$DEV_VERSIONS" | jq -r ".$app_file.image_digest")
-              image_repo=$(echo "$DEV_VERSIONS" | jq -r ".$app_file.image_repo")
+              chart_ver=$(echo "$DEV_VERSIONS" | jq -r ".$prod_file.chart_version")
+              image_digest=$(echo "$DEV_VERSIONS" | jq -r ".$prod_file.image_digest")
+              image_repo=$(echo "$DEV_VERSIONS" | jq -r ".$prod_file.image_repo")
               
               if [ "$chart_ver" != "null" ] && [ -n "$chart_ver" ]; then
                 # Update chart version
-                yq -i "(.spec.source.targetRevision) = \"$chart_ver\"" "$app_file"
+                yq -i "(.spec.source.targetRevision) = \"$chart_ver\"" "$prod_file"
               fi
               
               if [ "$image_digest" != "null" ] && [ -n "$image_digest" ]; then
-                # Update image digest and repository
-                CURRENT_VALUES=$(yq '.spec.source.helm.values' "$app_file")
-                UPDATED_VALUES=$(echo "$CURRENT_VALUES" | yq ".image.digest = \"$image_digest\" | .image.repository = \"$image_repo\"")
-                yq -i ".spec.source.helm.values = strenv(UPDATED_VALUES)" "$app_file"
+                # Update image digest and repository using yq with fromyaml/toyaml
+                DIGEST="$image_digest" REPO="$image_repo" yq -i '
+                  .spec.source.helm.values |=
+                    (. | fromyaml
+                       | .image.digest = env(DIGEST)
+                       | .image.repository = env(REPO)
+                       | toyaml)
+                ' "$prod_file"
               fi
+            else
+              echo "Warning: Production file $prod_file not found"
             fi
           done
       
-      - name: Create production PR
+      - name: Create production promotion PR
         uses: peter-evans/create-pull-request@v6
         with:
           path: cfg
@@ -132,4 +131,4 @@ jobs:
             GA promotion. This updates production with the latest stable versions from dev.
           branch: autobump/prod
           delete-branch: false
-          base: ${{ inputs.cluster_config_base }}
+          base: main

@@ -1,4 +1,4 @@
-name: App Build (reusable)
+name: 'Docker: Build and Push Images (reusable)'
 
 on:
   workflow_call:
@@ -15,7 +15,7 @@ on:
     outputs:
       digests-json:
         description: 'JSON object of component digests'
-        value: ${{ jobs.build.outputs.digests_json }}
+        value: ${{ jobs.collect-digests.outputs.digests-json }}
 
 jobs:
   build:

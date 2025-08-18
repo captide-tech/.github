@@ -1,4 +1,4 @@
-name: Release Please (reusable)
+name: 'Release Please: Helm (reusable)'
 
 on:
   workflow_call:
@@ -9,9 +9,9 @@ on:
       config_file:
         default: .github/release-please-config.json
         type: string
-      release_type:
-        description: 'Type of release: rc or ga'
-        default: 'rc'
+      chart_name:
+        description: 'Chart name (e.g., captide-document-engine)'
+        required: true
         type: string
     secrets:
       CAPTIDE_APP_ID:
@@ -20,18 +20,16 @@ on:
         required: true
     outputs:
       chart_release_created:
-        description: 'Whether chart release created'
         value: ${{ jobs.rp.outputs.chart_release_created }}
       chart_tag_name:
-        description: 'Tag name for chart'
         value: ${{ jobs.rp.outputs.chart_tag_name }}
 
 jobs:
   rp:
     runs-on: ubuntu-latest
     outputs:
-      chart_release_created: ${{ steps.rp.outputs['deploy/helm/captide-document-engine--release_created'] }}
-      chart_tag_name: ${{ steps.rp.outputs['deploy/helm/captide-document-engine--tag_name'] }}
+      chart_release_created: ${{ steps.rp.outputs.release_created }}
+      chart_tag_name: ${{ steps.rp.outputs.tag_name }}
     steps:
       - name: Create GitHub App installation token
         id: app-token
@@ -47,7 +45,11 @@ jobs:
           manifest-file: ${{ inputs.manifest_file }}
           config-file: ${{ inputs.config_file }}
           token: ${{ steps.app-token.outputs.token }}
-          release-type: ${{ inputs.release_type }}
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
         id: rp
+
+      - name: Debug Release Please outputs
+        run: |
+          echo "All Release Please outputs:"
+          printf '%s\n' "${{ toJson(steps.rp.outputs) }}"

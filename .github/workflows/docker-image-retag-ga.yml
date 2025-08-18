@@ -1,4 +1,4 @@
-name: App Release (reusable)
+name: 'Docker: Retag Images for GA (reusable)'
 
 on:
   workflow_call:
@@ -10,6 +10,10 @@ on:
       release_type:
         description: 'Type of release: rc or ga'
         default: 'rc'
+        type: string
+      image_digests_json:
+        description: 'JSON object of component -> image digest'
+        required: true
         type: string
 
 jobs:
@@ -49,17 +53,23 @@ jobs:
         env:
           OWNER: ${{ github.repository_owner }}
         run: |
-          SRC=ghcr.io/$OWNER/${{ github.event.repository.name }}/${{ matrix.component }}:${{ steps.vars.outputs.sha_short }}
+          # Get the digest for this component
+          digest=$(echo '${{ inputs.image_digests_json }}' | jq -r ".${{ matrix.component }}")
+          
+          if [ -z "$digest" ] || [ "$digest" = "null" ]; then
+            echo "Error: No digest found for component ${{ matrix.component }}"
+            exit 1
+          fi
+          
           DST_BASE=ghcr.io/$OWNER/${{ github.event.repository.name }}/${{ matrix.component }}
+          SRC="$DST_BASE@$digest"
           
-          # Create RC tag
-          docker buildx imagetools create --tag "$DST_BASE:${{ steps.vars.outputs.ver_rc }}" "$SRC"
-          
-          # Create major.minor tag for RC
-          docker buildx imagetools create --tag "$DST_BASE:${{ steps.vars.outputs.ver_mm }}-rc" "$SRC"
-          
-          # For GA releases, also create stable tags
-          if [ "${{ inputs.release_type }}" = "ga" ]; then
+          if [ "${{ inputs.release_type }}" = "rc" ]; then
+            # Create RC tags
+            docker buildx imagetools create --tag "$DST_BASE:${{ steps.vars.outputs.ver_rc }}" "$SRC"
+            docker buildx imagetools create --tag "$DST_BASE:${{ steps.vars.outputs.ver_mm }}-rc" "$SRC"
+          else
+            # Create GA tags
             docker buildx imagetools create --tag "$DST_BASE:${{ steps.vars.outputs.ver }}" "$SRC"
             docker buildx imagetools create --tag "$DST_BASE:${{ steps.vars.outputs.ver_mm }}" "$SRC"
           fi

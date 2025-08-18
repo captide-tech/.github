@@ -1,0 +1,146 @@
+name: 'Cluster Config: Bump Image Digests (reusable)'
+
+on:
+  workflow_call:
+    inputs:
+      components_matrix:
+        description: 'JSON array of component configurations'
+        required: true
+        type: string
+      image_digests_json:
+        description: 'JSON object of component -> image digest'
+        required: true
+        type: string
+      environment:
+        description: 'Target environment (e.g., dev)'
+        required: false
+        default: 'dev'
+        type: string
+      app_name:
+        description: 'Logical app name (e.g., captide-document-engine)'
+        required: true
+        type: string
+      pr_title:
+        description: 'Override PR title'
+        required: false
+        type: string
+      pr_body:
+        description: 'Override PR body'
+        required: false
+        type: string
+    secrets:
+      CAPTIDE_APP_ID:
+        required: true
+      CAPTIDE_APP_PRIVATE_KEY:
+        required: true
+
+jobs:
+  update-cluster:
+    name: Update ${{ inputs.environment }} cluster configuration
+    runs-on: ubuntu-latest
+    concurrency:
+      group: autobump-${{ inputs.environment }}-${{ inputs.app_name }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Compute repo name
+        id: repo
+        run: echo "repo_name=captide-cluster-config" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub App installation token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.CAPTIDE_APP_ID }}
+          private-key: ${{ secrets.CAPTIDE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ steps.repo.outputs.repo_name }}
+
+      - name: Checkout cluster config repository
+        uses: actions/checkout@v4
+        with:
+          repository: captide-tech/captide-cluster-config
+          token: ${{ steps.app-token.outputs.token }}
+          path: cfg
+
+      - name: Install yq
+        uses: ./.github/actions/install-yq
+
+      - name: Update Applications
+        working-directory: cfg
+        run: |
+          set -euo pipefail
+          
+          # Validate inputs
+          if [ -z "${{ inputs.components_matrix }}" ] || [ -z "${{ inputs.image_digests_json }}" ]; then
+            echo "Error: Missing required inputs"
+            exit 1
+          fi
+          
+          # Process each component
+          echo "${{ inputs.components_matrix }}" | jq -c '.[]' | while read -r component_data; do
+            component=$(echo "$component_data" | jq -r '.component')
+            application_files=$(echo "$component_data" | jq -r '.application_files // empty')
+            
+            if [ -n "$application_files" ]; then
+              digest=$(echo "${{ inputs.image_digests_json }}" | jq -r ".$component // empty")
+              
+              if [ -n "$digest" ] && [ "$digest" != "null" ]; then
+                echo "Processing component: $component with digest: $digest"
+                
+                # Update each application file for this component
+                echo "$application_files" | jq -r '.[]' | while read -r app_file; do
+                  if [ -n "$app_file" ] && [ -f "$app_file" ]; then
+                    echo "Updating $app_file for component $component"
+                    repo="ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}/$component"
+                    
+                    # Update the application file using yq with fromyaml/toyaml
+                    DIGEST="$digest" REPO="$repo" yq -i '
+                      .spec.source.helm.values |=
+                        (. | fromyaml
+                           | .image.digest = env(DIGEST)
+                           | .image.repository = env(REPO)
+                           | toyaml)
+                    ' "$app_file"
+                  else
+                    echo "Warning: Application file $app_file not found or empty"
+                  fi
+                done
+              else
+                echo "Warning: No digest found for component $component"
+              fi
+            fi
+          done
+
+      - name: Prepare PR metadata
+        id: pr-meta
+        run: |
+          # Default PR title and body if not provided
+          if [ -z "${{ inputs.pr_title }}" ]; then
+            echo "pr_title=chore(${{ inputs.environment }}): bump ${{ inputs.app_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "pr_title=${{ inputs.pr_title }}" >> $GITHUB_OUTPUT
+          fi
+          
+          if [ -z "${{ inputs.pr_body }}" ]; then
+            echo "pr_body=${{ inputs.environment }} deploy bump. This PR updates per-component image repositories and digests." >> $GITHUB_OUTPUT
+          else
+            echo "pr_body=${{ inputs.pr_body }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create/Update PR
+        uses: peter-evans/create-pull-request@v6
+        with:
+          path: cfg
+          token: ${{ steps.app-token.outputs.token }}
+          commit-message: ${{ steps.pr-meta.outputs.pr_title }}
+          title: ${{ steps.pr-meta.outputs.pr_title }}
+          body: ${{ steps.pr-meta.outputs.pr_body }}
+          branch: autobump/${{ inputs.environment }}/${{ inputs.app_name }}
+          delete-branch: false
+          base: main
+          labels: |
+            auto-merge:${{ inputs.environment }}
+            area:images
