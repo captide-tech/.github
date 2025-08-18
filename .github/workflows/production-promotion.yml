@@ -96,10 +96,10 @@ jobs:
               echo "Updating production $prod_file with dev versions"
               
               # Get dev versions for this file
-              chart_ver=$(echo "$DEV_VERSIONS" | jq -r ".$prod_file.chart_version")
-              image_digest=$(echo "$DEV_VERSIONS" | jq -r ".$prod_file.image_digest")
-              image_repo=$(echo "$DEV_VERSIONS" | jq -r ".$prod_file.image_repo")
-              image_tag=$(echo "$DEV_VERSIONS" | jq -r ".$prod_file.image_tag")
+              chart_ver=$(jq -r --arg k "$prod_file" '.[$k].chart_version // empty' <<< "$DEV_VERSIONS")
+              image_digest=$(jq -r --arg k "$prod_file" '.[$k].image_digest // empty' <<< "$DEV_VERSIONS")
+              image_repo=$(jq -r --arg k "$prod_file" '.[$k].image_repo // empty' <<< "$DEV_VERSIONS")
+              image_tag=$(jq -r --arg k "$prod_file" '.[$k].image_tag // empty' <<< "$DEV_VERSIONS")
               
               # Sanitize image_tag to avoid writing "null" string
               if [ "$image_tag" = "null" ] || [ -z "$image_tag" ]; then

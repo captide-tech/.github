@@ -10,38 +10,36 @@ This repository contains our reusable GitHub Actions workflows for consistent CI
 - **Trigger**: PR to `main` branch
 - **Process**: 
   1. Build and push Docker images with SHA tags
-  2. Release Please creates semantic versions
-  3. Retag images with RC semantic versions
-  4. Update dev cluster with new image digests + human-readable tags
-  5. Build and publish Helm charts with RC tags
-  6. Update dev cluster with new chart versions
+  2. Update dev cluster with new image digests
+  3. Release Please creates semantic versions
+  4. Build and publish Helm charts with RC tags
+  5. Update dev cluster with new chart versions
 - **Result**: Auto-merged PRs to dev cluster on green checks
 
 ### GA Promotion (Manual)
 - **Trigger**: Manual workflow dispatch in app repo
 - **Process**:
-  1. Extract current dev versions (chart + image digests + tags)
+  1. Extract current dev versions (chart + image digests)
   2. Retag Docker images with GA semantic versions
   3. Create GA Helm chart release via Release Please
   4. Build and publish GA chart
-  5. Promote dev versions to production cluster (including tags)
+  5. Promote dev versions to production cluster
 - **Result**: PR to production cluster for manual review
 
 ## Workflow Templates
 
 ### Docker & Images
 - **`docker-build-and-push.yml`**: Build multi-component Docker images, push to GHCR with SHA tags, output digests
-- **`docker-image-retag-ga.yml`**: Retag existing images with semantic versions (RC/GA) using digests as source, outputs component→version mapping
+- **`docker-image-retag-ga.yml`**: Retag existing images with semantic versions (RC/GA) using digests as source
 
 ### Helm Charts
 - **`helm-chart-build-and-publish.yml`**: Build and publish Helm charts to OCI registry
 - **`release-please.yml`**: Semantic versioning and release management using Release Please
-- **`release-please-enable-automerge.yml`**: Enable auto-merge on Release Please PRs (reusable)
 
 ### Cluster Configuration
-- **`cluster-config-bump-image-digests.yml`**: Update ArgoCD applications with new image digests + human-readable tags (dev)
+- **`cluster-config-bump-image-digests.yml`**: Update ArgoCD applications with new image digests (dev)
 - **`cluster-config-bump-chart-version.yml`**: Update ArgoCD applications with new chart versions (dev)
-- **`production-promotion.yml`**: Promote dev versions to production cluster (dev → prod mapping, including tags)
+- **`production-promotion.yml`**: Promote dev versions to production cluster (dev → prod mapping)
 
 ## Usage
 

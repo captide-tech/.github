@@ -100,10 +100,10 @@ jobs:
             application_files=$(echo "$component_data" | jq -r '.application_files // empty')
             
             if [ -n "$application_files" ]; then
-              digest=$(echo "$IMAGE_DIGESTS" | jq -r ".$component // empty")
+              digest=$(jq -r --arg c "$component" '.[$c] // empty' <<< "$IMAGE_DIGESTS")
               
               # Determine tag to stamp (component-specific mapping wins, else release_version, else blank)
-              tag=$(echo "$IMAGE_TAGS" | jq -r --arg c "$component" '.[$c] // empty' 2>/dev/null || true)
+              tag=$(jq -r --arg c "$component" '.[$c] // empty' <<< "${IMAGE_TAGS:-{}}" 2>/dev/null || true)
               if [ -z "${tag:-}" ] && [ -n "${RELEASE_VERSION:-}" ]; then
                 tag="$RELEASE_VERSION"
               fi

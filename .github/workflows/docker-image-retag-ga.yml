@@ -54,7 +54,7 @@ jobs:
           OWNER: ${{ github.repository_owner }}
         run: |
           # Get the digest for this component
-          digest=$(echo '${{ inputs.image_digests_json }}' | jq -r ".${{ matrix.component }}")
+          digest=$(jq -r --arg c "${{ matrix.component }}" '.[$c]' <<< '${{ inputs.image_digests_json }}')
           
           if [ -z "$digest" ] || [ "$digest" = "null" ]; then
             echo "Error: No digest found for component ${{ matrix.component }}"
