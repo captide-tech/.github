@@ -10,36 +10,63 @@ This repository contains our reusable GitHub Actions workflows for consistent CI
 - **Trigger**: PR to `main` branch
 - **Process**: 
   1. Build and push Docker images with SHA tags
-  2. Update dev cluster with new image digests
-  3. Release Please creates semantic versions
-  4. Build and publish Helm charts with RC tags
-  5. Update dev cluster with new chart versions
+  2. Release Please creates semantic versions for both app and chart
+  3. Retag images with RC semantic versions
+  4. Update dev cluster with new image digests + human-readable tags
+  5. Build and publish Helm charts with RC tags
+  6. Update dev cluster with new chart versions
 - **Result**: Auto-merged PRs to dev cluster on green checks
+- **Note**: Both application and Helm chart get RC versions (e.g., `1.8.0-rc.1`)
 
 ### GA Promotion (Manual)
 - **Trigger**: Manual workflow dispatch in app repo
 - **Process**:
-  1. Extract current dev versions (chart + image digests)
+  1. Extract current dev versions (chart + image digests + tags)
   2. Retag Docker images with GA semantic versions
   3. Create GA Helm chart release via Release Please
   4. Build and publish GA chart
-  5. Promote dev versions to production cluster
+  5. Promote dev versions to production cluster (including tags)
 - **Result**: PR to production cluster for manual review
+- **Note**: Both application and Helm chart get GA versions (e.g., `1.8.0`)
 
 ## Workflow Templates
 
 ### Docker & Images
 - **`docker-build-and-push.yml`**: Build multi-component Docker images, push to GHCR with SHA tags, output digests
-- **`docker-image-retag-ga.yml`**: Retag existing images with semantic versions (RC/GA) using digests as source
+- **`docker-image-retag-ga.yml`**: Retag existing images with semantic versions (RC/GA) using digests as source, outputs component→version mapping
 
 ### Helm Charts
 - **`helm-chart-build-and-publish.yml`**: Build and publish Helm charts to OCI registry
 - **`release-please.yml`**: Semantic versioning and release management using Release Please
+- **`release-please-enable-automerge.yml`**: Enable auto-merge on Release Please PRs (reusable)
 
 ### Cluster Configuration
-- **`cluster-config-bump-image-digests.yml`**: Update ArgoCD applications with new image digests (dev)
+- **`cluster-config-bump-image-digests.yml`**: Update ArgoCD applications with new image digests + human-readable tags (dev)
 - **`cluster-config-bump-chart-version.yml`**: Update ArgoCD applications with new chart versions (dev)
-- **`production-promotion.yml`**: Promote dev versions to production cluster (dev → prod mapping)
+- **`production-promotion.yml`**: Promote dev versions to production cluster (dev → prod mapping, including tags)
+
+## Image Tag Implementation
+
+### Features
+- **Human-readable tags** alongside digests for better operability
+- **Zero change to pull semantics** - still pin by digest for reproducibility
+- **Pod labels** for `kubectl` and dashboard visibility
+- **Backward compatible** - existing deployments continue working
+
+### New Inputs
+- `release_version`: Global semver (e.g., `1.8.0-rc.1`)
+- `image_tags_json`: Component-specific mapping (e.g., `{"api":"1.8.0-rc.1"}`)
+
+### Helm Values Structure
+```yaml
+image:
+  repository: ghcr.io/owner/repo/component
+  digest: sha256:abc123...  # Source of truth for pulls
+  tag: 1.8.0-rc.1          # Human-readable metadata
+
+podLabels:
+  app.kubernetes.io/version: 1.8.0-rc.1  # For kubectl visibility
+```
 
 ## Usage
 
@@ -48,6 +75,100 @@ This repository contains our reusable GitHub Actions workflows for consistent CI
 2. Update component names and paths
 3. Configure Release Please configs (`release-please-rc.json`, `release-please-ga.json`)
 4. Set required secrets and variables
+
+### Creating RC Pipeline in App Repos
+App repos should create their own orchestrator workflows using the reusable templates:
+
+```yaml
+# Example: .github/workflows/rc-pipeline.yml in app repo
+name: 'RC Pipeline: Build, Release, Retag, Deploy'
+
+on:
+  workflow_dispatch:
+    inputs:
+      components: '[{"component":"api","dockerfile":"Dockerfile.api"}]'
+      components_matrix: '[{"component":"api","application_files":["clusters/dev/api.yaml"]}]'
+      app_name: 'my-app'
+
+jobs:
+  build:
+    uses: captide-tech/.github/workflows/docker-build-and-push.yml@main
+    with:
+      components: ${{ inputs.components }}
+      push_on_main: true
+
+  release-please:
+    runs-on: ubuntu-latest
+    needs: build
+    outputs:
+      release_version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: release
+        uses: google-github-actions/release-please-action@v4
+        with:
+          release-type: node
+          package-name: ${{ inputs.app_name }}
+          prerelease: true
+          prerelease-type: rc
+
+  retag-rc:
+    needs: [build, release-please]
+    uses: captide-tech/.github/workflows/docker-image-retag-ga.yml@main
+    with:
+      components: ${{ inputs.components }}
+      release_type: rc
+      release_version: ${{ needs.release-please.outputs.release_version }}
+      image_digests_json: ${{ needs.build.outputs.digests-json }}
+
+  bump-cluster-config:
+    needs: [build, release-please, retag-rc]
+    uses: captide-tech/.github/workflows/cluster-config-bump-image-digests.yml@main
+    with:
+      components_matrix: ${{ inputs.components_matrix }}
+      image_digests_json: ${{ needs.build.outputs.digests-json }}
+      release_version: ${{ needs.release-please.outputs.release_version }}
+      app_name: ${{ inputs.app_name }}
+```
+
+### Auto-merge Setup for Release Please RC PRs
+
+To enable automatic merging of Release Please RC PRs, add this workflow to your app repo:
+
+```yaml
+# .github/workflows/auto-merge-release-please-rc.yml
+name: Auto-merge RC Release Please PRs
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  rc-automerge:
+    # Only Release Please PRs for prereleases (RC)
+    if: >
+      github.actor == 'github-actions[bot]' &&
+      contains(github.event.pull_request.title, 'release') &&
+      contains(github.event.pull_request.title, '-rc.') &&
+      !contains(join(github.event.pull_request.labels.*.name, ','), 'no-automerge')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: captide-tech/.github/workflows/release-please-enable-automerge.yml@v1
+        with:
+          pr_number: ${{ github.event.pull_request.number }}
+          merge_method: squash
+```
+
+**Repository Settings Required:**
+- Settings → General → **Allow auto-merge** ✅
+- Branch protection on `main`: **Require status checks** (your CI `build` job etc.)
+- Do **not** require push-only jobs (retag/publish/bump) on PRs
 
 ### Required Secrets
 - `CAPTIDE_APP_ID`: GitHub App ID for cluster config access
@@ -59,11 +180,13 @@ This repository contains our reusable GitHub Actions workflows for consistent CI
 - **RC**: `1.2.3-rc.1`, `1.2.3-rc.2` (pre-releases)
 - **GA**: `1.2.3` (stable releases)
 - **Images**: Always use digests for retagging, never SHA tags
+- **Tags**: Human-readable metadata alongside digests for operability
 
 ### Cluster Updates
 - **Dev**: Automatic via CI/CD pipeline
 - **Production**: Manual via `production-promotion.yml` workflow in app repo
 - **Coalesced PRs**: Multiple updates create/update same PR branch
+- **Tag Preservation**: Image tags flow through promotion pipeline
 
 ### Chart Management
 - **RC**: New chart package with `-rc` suffix
