@@ -40,17 +40,26 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
 
-      - name: Debug inputs
+      - name: Checkout caller repository
+        uses: actions/checkout@v4
+        with:
+          # Force the caller repo + exact ref
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Sanity check
         run: |
+          echo "Checked out ${{ github.repository }} @ ${{ github.sha }}"
+          ls -la .
           echo "CONFIG_FILE=${{ inputs.config_file }}"
           echo "MANIFEST_FILE=${{ inputs.manifest_file }}"
-          echo "CHART_NAME=${{ inputs.chart_name }}"
-          echo "Checking if config file exists:"
-          ls -la ${{ inputs.config_file }} || echo "Config file not found!"
-          echo "Checking if manifest file exists:"
-          ls -la ${{ inputs.manifest_file }} || echo "Manifest file not found!"
+          test -f "${{ inputs.config_file }}" || (echo "Config missing" && ls -la .github || true)
+          test -f "${{ inputs.manifest_file }}" || (echo "Manifest missing" && ls -la || true)
 
       - name: Release Please
+        id: rp
         uses: googleapis/release-please-action@v4
         with:
           manifest-file: ${{ inputs.manifest_file }}
@@ -58,7 +67,6 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
-        id: rp
 
       - name: Debug Release Please outputs
         run: |
