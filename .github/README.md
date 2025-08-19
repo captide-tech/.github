@@ -182,6 +182,11 @@ jobs:
 - **Images**: Always use digests for retagging, never SHA tags
 - **Tags**: Human-readable metadata alongside digests for operability
 
+#### Tag Prefixes (Recommended)
+- **App tags**: `v2.0.0`, `v2.0.0-rc.1` (with `v` prefix)
+- **Helm chart tags**: `helm-v1.5.2`, `helm-v1.5.2-rc.1` (with `helm-` prefix)
+- **Rationale**: Clear distinction between application and infrastructure releases, especially when using Release Please for both
+
 ### Cluster Updates
 - **Dev**: Automatic via CI/CD pipeline
 - **Production**: Manual via `production-promotion.yml` workflow in app repo
