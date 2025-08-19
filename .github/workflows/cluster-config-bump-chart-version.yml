@@ -76,10 +76,13 @@ jobs:
           echo "$APPLICATION_FILES" | jq -r '.[]' | while read -r app_file; do
             if [ -n "$app_file" ] && [ -f "$app_file" ]; then
               echo "Updating chart version in $app_file to v$chart_version"
-              # Single-source Application
-              yq -i '(.spec.source.repoURL) = "oci://ghcr.io/${{ github.repository_owner }}/charts" | (.spec.source.chart) = "${{ inputs.app_name }}" | (.spec.source.targetRevision) = strenv(chart_version)' "$app_file"
-              # Multi-source Application (update matching chart entry)
-              yq -i '(.spec.sources[] | select(.chart == "${{ inputs.app_name }}")).targetRevision = strenv(chart_version)' "$app_file"
+              
+              # Multi-source Application (update matching chart entry with correct chart name)
+              # Your chart naming convention: captide-tech/charts/captide-document-engine
+              chart_name="captide-tech/charts/${{ inputs.app_name }}"
+              yq -i "(.spec.sources[] | select(.chart == \"$chart_name\")).targetRevision = \"$chart_version\"" "$app_file"
+              
+              echo "✅ Updated $app_file - chart: $chart_name, version: $chart_version"
             fi
           done
       

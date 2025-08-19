@@ -77,93 +77,10 @@ podLabels:
 4. Set required secrets and variables
 
 ### Creating RC Pipeline in App Repos
-App repos should create their own orchestrator workflows using the reusable templates:
-
-```yaml
-# Example: .github/workflows/rc-pipeline.yml in app repo
-name: 'RC Pipeline: Build, Release, Retag, Deploy'
-
-on:
-  workflow_dispatch:
-    inputs:
-      components: '[{"component":"api","dockerfile":"Dockerfile.api"}]'
-      components_matrix: '[{"component":"api","application_files":["clusters/dev/api.yaml"]}]'
-      app_name: 'my-app'
-
-jobs:
-  build:
-    uses: captide-tech/.github/workflows/docker-build-and-push.yml@main
-    with:
-      components: ${{ inputs.components }}
-      push_on_main: true
-
-  release-please:
-    runs-on: ubuntu-latest
-    needs: build
-    outputs:
-      release_version: ${{ steps.release.outputs.version }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - id: release
-        uses: google-github-actions/release-please-action@v4
-        with:
-          release-type: node
-          package-name: ${{ inputs.app_name }}
-          prerelease: true
-          prerelease-type: rc
-
-  retag-rc:
-    needs: [build, release-please]
-    uses: captide-tech/.github/workflows/docker-image-retag-ga.yml@main
-    with:
-      components: ${{ inputs.components }}
-      release_type: rc
-      release_version: ${{ needs.release-please.outputs.release_version }}
-      image_digests_json: ${{ needs.build.outputs.digests-json }}
-
-  bump-cluster-config:
-    needs: [build, release-please, retag-rc]
-    uses: captide-tech/.github/workflows/cluster-config-bump-image-digests.yml@main
-    with:
-      components_matrix: ${{ inputs.components_matrix }}
-      image_digests_json: ${{ needs.build.outputs.digests-json }}
-      release_version: ${{ needs.release-please.outputs.release_version }}
-      app_name: ${{ inputs.app_name }}
-```
+App repos should create their own orchestrator workflows using the reusable templates. Reference the workflow files in this repository for implementation examples.
 
 ### Auto-merge Setup for Release Please RC PRs
-
-To enable automatic merging of Release Please RC PRs, add this workflow to your app repo:
-
-```yaml
-# .github/workflows/auto-merge-release-please-rc.yml
-name: Auto-merge RC Release Please PRs
-
-on:
-  pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review, labeled]
-
-permissions:
-  pull-requests: write
-  contents: read
-
-jobs:
-  rc-automerge:
-    # Only Release Please PRs for prereleases (RC)
-    if: >
-      github.actor == 'github-actions[bot]' &&
-      contains(github.event.pull_request.title, 'release') &&
-      contains(github.event.pull_request.title, '-rc.') &&
-      !contains(join(github.event.pull_request.labels.*.name, ','), 'no-automerge')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: captide-tech/.github/workflows/release-please-enable-automerge.yml@v1
-        with:
-          pr_number: ${{ github.event.pull_request.number }}
-          merge_method: squash
-```
+To enable automatic merging of Release Please RC PRs, add the auto-merge workflow to your app repo. See the workflow templates for the complete implementation.
 
 **Repository Settings Required:**
 - Settings → General → **Allow auto-merge** ✅
@@ -181,11 +98,17 @@ jobs:
 - **GA**: `1.2.3` (stable releases)
 - **Images**: Always use digests for retagging, never SHA tags
 - **Tags**: Human-readable metadata alongside digests for operability
+- **Per-component semver**: Each component should have independent versioning (e.g., multiple background workers versioned separately)
 
 #### Tag Prefixes (Recommended)
 - **App tags**: `v2.0.0`, `v2.0.0-rc.1` (with `v` prefix)
 - **Helm chart tags**: `helm-v1.5.2`, `helm-v1.5.2-rc.1` (with `helm-` prefix)
 - **Rationale**: Clear distinction between application and infrastructure releases, especially when using Release Please for both
+
+### Build Optimization
+- **Selective builds**: Use `dorny/paths-filter` to only build components that have changed
+- **Lightweight images**: Keep Docker images as small as possible for faster builds and deployments
+- **Fast workflows**: Optimize workflow execution time through efficient caching and parallel jobs
 
 ### Cluster Updates
 - **Dev**: Automatic via CI/CD pipeline
