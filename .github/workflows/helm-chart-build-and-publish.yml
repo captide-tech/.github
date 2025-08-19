@@ -5,7 +5,7 @@ on:
     inputs:
       chart_path: { required: true, type: string }
       chart_name: { required: true, type: string }
-      chart_tag_name: { required: true, type: string }
+      chart_tag_name: { required: false, type: string }
 
 jobs:
   publish:
@@ -23,7 +23,12 @@ jobs:
       - name: Extract released version
         id: v
         run: |
-          base_ver=$(echo '${{ inputs.chart_tag_name }}' | sed -E 's/^.*-v(.*)$/\1/')
+          if [ -n "${{ inputs.chart_tag_name }}" ]; then
+            base_ver=$(echo '${{ inputs.chart_tag_name }}' | sed -E 's/^.*-v(.*)$/\1/')
+          else
+            # Use chart version from Chart.yaml if no tag provided
+            base_ver=$(grep '^version:' "${{ inputs.chart_path }}/Chart.yaml" | awk '{print $2}' | tr -d '"')
+          fi
           echo "CHART_VERSION=$base_ver" >> $GITHUB_OUTPUT
       - name: Login to GHCR (OCI)
         run: echo ${{ secrets.GITHUB_TOKEN }} | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
