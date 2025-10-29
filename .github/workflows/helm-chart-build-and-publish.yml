@@ -21,47 +21,14 @@ jobs:
       - name: Setup Helm
         run: |
           set -e
-          HELM_VERSION="3.18.6"
-          # Try multiple sources - get.helm.sh is experiencing timeouts, so we prioritize alternatives
-          # Option 1: Try using apt (fastest, if available)
-          if command -v apt-get &> /dev/null; then
-            echo "Attempting to install Helm via apt..."
-            curl https://baltocdn.com/helm/signing.asc | sudo apt-key add -
-            sudo apt-get install apt-transport-https --yes
-            echo "deb https://baltocdn.com/helm/stable/debian/ all main" | sudo tee /etc/apt/sources.list.d/helm-stable-debian.list
-            if sudo apt-get update && sudo apt-get install -y helm=${HELM_VERSION}-1; then
-              echo "Helm installed successfully via apt"
-              helm version --short
-              exit 0
-            fi
-          fi
+          echo "Installing Helm using official installation script..."
           
-          # Option 2: Try GitHub releases (usually more reliable than get.helm.sh)
-          for url in \
-            "https://github.com/helm/helm/releases/download/v${HELM_VERSION}/helm-v${HELM_VERSION}-linux-amd64.tar.gz"; do
-            echo "Attempting to download Helm from: $url"
-            if curl -fsSL --max-time 60 --retry 5 --retry-delay 3 "$url" -o helm.tar.gz; then
-              echo "Download successful from $url"
-              tar -zxvf helm.tar.gz
-              sudo mv linux-amd64/helm /usr/local/bin/helm
-              helm version --short
-              exit 0
-            else
-              echo "Download failed from $url, trying next source..."
-            fi
-          done
+          # Use the official Helm installation script (most reliable method)
+          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
           
-          # Option 3: Last resort - try get.helm.sh with longer timeout
-          echo "Attempting get.helm.sh as fallback (known to have timeout issues)..."
-          if curl -fsSL --max-time 120 --retry 5 --retry-delay 5 "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz" -o helm.tar.gz; then
-            tar -zxvf helm.tar.gz
-            sudo mv linux-amd64/helm /usr/local/bin/helm
-            helm version --short
-            exit 0
-          fi
-          
-          echo "Error: Failed to download Helm from all sources"
-          exit 1
+          # Verify installation
+          helm version --short
+          echo "Helm installed successfully"
       - name: Extract released version
         id: v
         run: |
