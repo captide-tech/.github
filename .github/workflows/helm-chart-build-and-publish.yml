@@ -21,14 +21,33 @@ jobs:
       - name: Setup Helm
         run: |
           set -e
-          echo "Installing Helm using official installation script..."
           
-          # Use the official Helm installation script (most reliable method)
-          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          # Check if Helm is already installed
+          if command -v helm &> /dev/null; then
+            echo "Helm is already installed: $(helm version --short)"
+            exit 0
+          fi
+          
+          # Try snap first (fastest on Ubuntu)
+          if command -v snap &> /dev/null; then
+            echo "Installing Helm via snap..."
+            sudo snap install helm --classic && helm version --short && exit 0
+          fi
+          
+          # Fallback: Try direct download from GitHub releases (more reliable than get.helm.sh)
+          echo "Installing Helm via GitHub releases..."
+          HELM_VERSION="3.14.4"
+          curl -fsSL --max-time 90 --retry 5 --retry-delay 3 \
+            "https://github.com/helm/helm/releases/download/v${HELM_VERSION}/helm-v${HELM_VERSION}-linux-amd64.tar.gz" \
+            -o helm.tar.gz
+          
+          tar -zxvf helm.tar.gz
+          sudo mv linux-amd64/helm /usr/local/bin/helm
+          sudo chmod +x /usr/local/bin/helm
           
           # Verify installation
           helm version --short
-          echo "Helm installed successfully"
+          echo "Helm ${HELM_VERSION} installed successfully"
       - name: Extract released version
         id: v
         run: |
