@@ -20,6 +20,8 @@ jobs:
           fetch-depth: 0
       - name: Setup Helm
         uses: azure/setup-helm@v4
+        with:
+          version: '3.19.0'
       - name: Extract released version
         id: v
         run: |
