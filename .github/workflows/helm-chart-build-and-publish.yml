@@ -21,7 +21,7 @@ jobs:
       - name: Setup Helm
         uses: azure/setup-helm@v4
         with:
-          version: '3.19.0'
+          version: '3.16.3'
       - name: Extract released version
         id: v
         run: |
