@@ -37,6 +37,12 @@ on:
         description: 'Override PR body'
         required: false
         type: string
+      # NEW: Renovate integration
+      renovate_enabled:
+        description: 'Whether to enable Renovate-style updates'
+        required: false
+        default: 'false'
+        type: string
     secrets:
       CAPTIDE_APP_ID:
         required: true
@@ -70,7 +76,7 @@ jobs:
       - name: Checkout cluster config repository
         uses: actions/checkout@v4
         with:
-          repository: captide-tech/captide-cluster-config
+          repository: Model-ML/captide-cluster-config
           token: ${{ steps.app-token.outputs.token }}
           path: cfg
 
@@ -86,6 +92,7 @@ jobs:
           IMAGE_TAGS: ${{ inputs.image_tags_json }}
           RELEASE_VERSION: ${{ inputs.release_version }}
           COMPONENTS_MATRIX: ${{ inputs.components_matrix }}
+          RENOVATE_ENABLED: ${{ inputs.renovate_enabled }}
         run: |
           set -euo pipefail
           
@@ -133,6 +140,12 @@ jobs:
                 repo="ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}/$component"
                 yq -i ".image.repository = \"$repo\"" "$values_file"
                 
+                # Add Renovate annotation if enabled
+                if [ "$RENOVATE_ENABLED" = "true" ]; then
+                  # Add renovate: datasource=docker depName=ghcr.io/... annotation
+                  yq -i '.image.repository = .image.repository + " # renovate: datasource=docker depName=" + .image.repository' "$values_file"
+                fi
+                
                 echo "✅ Updated $values_file"
               done
             else
@@ -145,13 +158,13 @@ jobs:
         run: |
           # Default PR title and body if not provided
           if [ -z "${{ inputs.pr_title }}" ]; then
-            echo "pr_title=chore(${{ inputs.environment }}): bump ${{ inputs.app_name }}" >> $GITHUB_OUTPUT
+            echo "pr_title=chore(${{ inputs.environment }}): bump ${{ inputs.app_name }} image digests" >> $GITHUB_OUTPUT
           else
             echo "pr_title=${{ inputs.pr_title }}" >> $GITHUB_OUTPUT
           fi
           
           if [ -z "${{ inputs.pr_body }}" ]; then
-            echo "pr_body=${{ inputs.environment }} deploy bump. This PR updates per-component image repositories, digests, and human-readable tags." >> $GITHUB_OUTPUT
+            echo "pr_body=Automated image digest update for ${{ inputs.environment }} environment. This PR updates image digests and tags for ${{ inputs.app_name }} components. All changes are automatically tested and validated. This update is compatible with Renovate for future automated dependency management." >> $GITHUB_OUTPUT
           else
             echo "pr_body=${{ inputs.pr_body }}" >> $GITHUB_OUTPUT
           fi
@@ -164,9 +177,10 @@ jobs:
           commit-message: ${{ steps.pr-meta.outputs.pr_title }}
           title: ${{ steps.pr-meta.outputs.pr_title }}
           body: ${{ steps.pr-meta.outputs.pr_body }}
-          branch: autobump/${{ inputs.environment }}/${{ inputs.app_name }}
+          branch: autobump/${{ inputs.environment }}/${{ inputs.app_name }}-images
           delete-branch: false
           base: main
           labels: |
             auto-merge:${{ inputs.environment }}
             area:images
+            dependencies
