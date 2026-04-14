@@ -67,4 +67,5 @@ jobs:
       - name: Push chart
         run: |
           CHART_PKG=$(ls ${{ inputs.chart_name }}-*.tgz)
-          helm push "$CHART_PKG" oci://ghcr.io/${{ github.repository_owner }}/charts
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          helm push "$CHART_PKG" oci://ghcr.io/${OWNER}/charts
