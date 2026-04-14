@@ -6,6 +6,10 @@ on:
       chart_path: { required: true, type: string }
       chart_name: { required: true, type: string }
       chart_tag_name: { required: false, type: string }
+    secrets:
+      GHCR_TOKEN:
+        required: false
+        description: "PAT with packages:write, used instead of GITHUB_TOKEN when provided"
 
 jobs:
   publish:
@@ -59,7 +63,10 @@ jobs:
           fi
           echo "CHART_VERSION=$base_ver" >> $GITHUB_OUTPUT
       - name: Login to GHCR (OCI)
-        run: echo ${{ secrets.GITHUB_TOKEN }} | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
+        run: |
+          TOKEN="${{ secrets.GHCR_TOKEN }}"
+          if [ -z "$TOKEN" ]; then TOKEN="${{ secrets.GITHUB_TOKEN }}"; fi
+          echo "$TOKEN" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
       - name: Helm deps
         run: helm dependency update "${{ inputs.chart_path }}" || true
       - name: Package chart
