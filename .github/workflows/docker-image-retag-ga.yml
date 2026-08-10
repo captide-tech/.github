@@ -72,7 +72,11 @@ jobs:
             exit 1
           fi
           
-          DST_BASE=ghcr.io/$OWNER/${{ github.event.repository.name }}/${{ matrix.component }}
+          # An owner is free to carry a capital, a GHCR path is not, and the
+          # build side never hits this because docker/metadata-action folds the
+          # case for us. Same treatment as helm-chart-build-and-publish.
+          OWNER_LC=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
+          DST_BASE=ghcr.io/$OWNER_LC/${{ github.event.repository.name }}/${{ matrix.component }}
           SRC="$DST_BASE@$digest"
           
           if [ "${{ inputs.release_type }}" = "rc" ]; then

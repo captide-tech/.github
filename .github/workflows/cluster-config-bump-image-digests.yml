@@ -136,8 +136,12 @@ jobs:
                   yq -i ".image.tag = \"$tag\"" "$values_file"
                 fi
                 
-                # Update image repository (construct from component name)
-                repo="ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}/$component"
+                # Update image repository (construct from component name).
+                # Lowercased because an owner may carry a capital and a GHCR
+                # path may not; this string is written into the cluster config,
+                # so an uppercase one is an image the cluster cannot pull.
+                owner_lc=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+                repo="ghcr.io/$owner_lc/${{ github.event.repository.name }}/$component"
                 yq -i ".image.repository = \"$repo\"" "$values_file"
                 
                 # Add Renovate annotation if enabled
