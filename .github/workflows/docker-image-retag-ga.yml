@@ -63,6 +63,7 @@ jobs:
       - name: Retag existing image to semver tags
         env:
           OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
         run: |
           # Get the digest for this component
           digest=$(jq -r --arg c "${{ matrix.component }}" '.[$c]' <<< '${{ inputs.image_digests_json }}')
@@ -72,7 +73,12 @@ jobs:
             exit 1
           fi
           
-          DST_BASE=ghcr.io/$OWNER/${{ github.event.repository.name }}/${{ matrix.component }}
+          # GHCR rejects uppercase repository names. docker/metadata-action lowercases for us in
+          # docker-build-and-push.yml, but imagetools takes the ref verbatim.
+          OWNER_LC=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
+          REPO_LC=$(echo "$REPO" | tr '[:upper:]' '[:lower:]')
+          
+          DST_BASE=ghcr.io/$OWNER_LC/$REPO_LC/${{ matrix.component }}
           SRC="$DST_BASE@$digest"
           
           if [ "${{ inputs.release_type }}" = "rc" ]; then
